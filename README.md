@@ -1,3 +1,17 @@
+🌐 English |
+[日本語](https://f5xc-salesdemos.github.io/observability/ja/) |
+[한국어](https://f5xc-salesdemos.github.io/observability/ko/) |
+[简体中文](https://f5xc-salesdemos.github.io/observability/zh-cn/) |
+[繁體中文](https://f5xc-salesdemos.github.io/observability/zh-tw/) |
+[Español](https://f5xc-salesdemos.github.io/observability/es/) |
+[Português](https://f5xc-salesdemos.github.io/observability/pt-br/) |
+[Français](https://f5xc-salesdemos.github.io/observability/fr/) |
+[Deutsch](https://f5xc-salesdemos.github.io/observability/de/) |
+[Italiano](https://f5xc-salesdemos.github.io/observability/it/) |
+[العربية](https://f5xc-salesdemos.github.io/observability/ar/) |
+[हिन्दी](https://f5xc-salesdemos.github.io/observability/hi/) |
+[ไทย](https://f5xc-salesdemos.github.io/observability/th/)
+
 # Observability
 
 [![GitHub Pages Deploy](https://github.com/f5xc-salesdemos/observability/actions/workflows/github-pages-deploy.yml/badge.svg)](https://github.com/f5xc-salesdemos/observability/actions/workflows/github-pages-deploy.yml)
