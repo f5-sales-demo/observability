@@ -20,7 +20,6 @@
 
 F5 XC observability and monitoring
 
-
 ## Documentation
 
 Full documentation is available at **[https://f5-sales-demo.github.io/observability/](https://f5-sales-demo.github.io/observability/)**.
