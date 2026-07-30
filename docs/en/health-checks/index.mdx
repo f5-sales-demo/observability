@@ -1,0 +1,278 @@
+---
+title: Health check design
+description: What each health check type actually proves, why a Transmission Control Protocol probe against a managed cloud load balancer stays green through an outage, and how to read 504 against 503 as a diagnostic signal.
+sidebar:
+  order: 10
+  label: Health checks
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+
+A health check answers one question: should this origin server keep receiving traffic? The answer is
+only as good as the layer the probe exercises. A probe that confirms a Transmission Control Protocol
+(TCP) connection can be established tells you a listener is accepting connections. It does not tell
+you the application behind that listener can serve a request.
+
+That gap is not academic. When the origin is a managed cloud load balancer, the two answers diverge
+during exactly the failures you most need to detect.
+
+## What each health check type proves
+
+An F5 Distributed Cloud health check object attaches to an origin pool. An origin pool references up
+to four health check objects, and holds up to 32 origin servers.
+
+| Probe | What it establishes | What it does not establish |
+| --- | --- | --- |
+| `tcp_health_check` | A TCP handshake completes on the health check port | That anything is listening above the transport layer, or that a request would succeed |
+| `http_health_check` | A Hypertext Transfer Protocol (HTTP) request to a path returns a response you accept | Anything beyond the path you chose, so choose it deliberately |
+
+A TCP probe is the right choice for a genuinely non-HTTP origin: a database, a message broker, a raw
+TCP service. For an origin serving HTTP, or HTTP over Transport Layer Security (HTTPS), it is almost
+always the wrong choice, because the thing you care about is whether the application answers.
+
+<Aside type="caution" title="A shallow HTTP path is only marginally better than TCP">
+An `http_health_check` against a path that returns a static `200` from the web server, before any
+application logic, database call, or upstream dependency, reports healthy while the application
+fails. Choose a path whose success depends on the thing the origin exists to do.
+</Aside>
+
+## Why a managed cloud load balancer breaks a TCP probe
+
+Point an origin pool at a cloud provider's load balancer and you introduce a listener that is
+operated separately from the application behind it:
+
+```text
+Distributed Cloud  --TCP 443-->  cloud load balancer  -->  backend targets
+                                 (accepts connections)     (may be unreachable)
+```
+
+A cloud load balancer accepts and completes TCP connections at its listener whenever the load
+balancer itself is healthy. Whether its backend targets are reachable is a separate matter. Amazon
+Web Services Elastic Load Balancing, Google Cloud load balancers, and Azure Load Balancer all behave
+this way.
+
+So when the backends fail, whether from a regional network fault, an availability zone loss, or
+targets failing their own registration checks, the sequence is:
+
+1. The cloud load balancer stays up and keeps accepting TCP connections.
+2. Your `tcp_health_check` completes its handshake and reports the origin healthy.
+3. Distributed Cloud keeps forwarding requests to that origin.
+4. Each request establishes a connection, waits, and receives nothing.
+5. Requests fail at the route timeout.
+
+The probe never goes red. Nothing is ejected. The outage lasts as long as the underlying fault.
+
+## Read the error code as a diagnostic signal
+
+The status code your clients receive distinguishes these cases, which makes it the fastest way to
+tell whether health checking was working during an incident.
+
+| Client sees | Meaning | What it tells you |
+| --- | --- | --- |
+| `503` | No healthy upstream, or the upstream connection failed | The origin was ejected, or the connection never established. Health checking or connection handling reacted. |
+| `504` | The upstream request timed out | A connection **was** established and no response arrived before the route timeout. Traffic was still being sent to that origin. |
+
+A sustained spike of `504` is therefore evidence that the origin was still in rotation. If your
+health check had marked it unhealthy and no healthy origin remained, clients would receive `503`
+instead.
+
+<Aside type="tip">
+Distributed Cloud request logs carry the response flag alongside the status code. Aggregating an
+incident window by response flag separates `UT` (upstream request timeout) from `UH` (no healthy
+upstream) and `UF` (upstream connection failure), which settles the question without inference.
+</Aside>
+
+## Outlier detection is a separate ejection path
+
+Active health checking is not the only mechanism that removes an origin from rotation. Outlier
+detection ejects an endpoint based on the errors real traffic is experiencing:
+
+```json
+{
+  "advanced_options": {
+    "outlier_detection": {
+      "consecutive_5xx": 5,
+      "consecutive_gateway_failure": 5,
+      "base_ejection_time": 30000,
+      "max_ejection_percent": 50,
+      "interval": 10000
+    }
+  }
+}
+```
+
+The two mechanisms fail differently, which is why you want both:
+
+- An active probe tests a path you chose, on a schedule you set. It misses failures the probe cannot
+  see.
+- Outlier detection observes what clients actually get. It reacts to the failure your users are
+  experiencing, without you having predicted its shape.
+
+Outlier detection is off unless you configure it. An origin pool carrying
+`"disable_outlier_detection": {}` has active health checking as its only ejection path.
+
+## Panic threshold changes what unhealthy means
+
+When the proportion of healthy endpoints in a pool falls below the panic threshold, traffic is
+distributed across all endpoints regardless of health status, on the reasoning that some chance of
+success beats none.
+
+This matters when you reason backwards from an incident. "Health checks were configured" does not by
+itself explain observed behaviour during a total origin failure, because a pool in panic mode
+forwards to endpoints it knows are unhealthy. Check the setting before concluding the probe was
+broken:
+
+- `panic_threshold` set to a percentage means panic mode applies below that proportion.
+- `no_panic_threshold` means panic mode is disabled. With every endpoint unhealthy, clients receive
+  `503` rather than being sent to a dead origin.
+
+## Detection is not resilience
+
+Ejecting an origin only helps if traffic has somewhere else to go. A pool holding one origin server,
+referenced by one route pool, has no failover path. Correct detection changes the error from `504` to
+`503` and nothing else.
+
+Give each failure domain its own origin pool with its own health check, then reference the pools in a
+defined order so one is preferred and the other takes over:
+
+```json
+{
+  "default_route_pools": [
+    { "pool": { "namespace": "demo-app", "name": "origins-primary" }, "weight": 1, "priority": 1 },
+    { "pool": { "namespace": "demo-app", "name": "origins-secondary" }, "weight": 1, "priority": 0 }
+  ]
+}
+```
+
+Use separate pools rather than one pool holding every origin, because a single pool produces one
+blended health verdict and one shared probe configuration. Separate pools give you an independent
+verdict per domain, which is what makes a controlled failover possible.
+
+<Aside type="caution" title="Confirm the priority convention before you rely on it">
+The numeric direction of `priority` for HTTP load balancer route pools is not documented, and the
+Domain Name System (DNS) load balancer documentation states the opposite convention for its own pool
+members. Configure the behaviour you want, then verify it by failing the primary pool and observing
+where traffic goes. Do not assume from the number alone.
+</Aside>
+
+Where the failure domains are different cloud providers, Distributed Cloud sits above the provider
+boundary and can fail between them. That is the case a single-provider design cannot cover.
+
+## Detection is not notification
+
+A health check that transitions to unhealthy raises an alert. Nothing delivers it until you create an
+alert policy and an alert receiver. Without them the platform knows the origin failed and no one
+does.
+
+Two alerts cover origin health, and both belong to the `Virtual-Host` alert group:
+
+| Alert | Severity | Raised when |
+| --- | --- | --- |
+| `ServiceEndpointHealthcheckFailure` | `minor` | A health check fails for a virtual host endpoint |
+| `ServiceServerErrorPerSourceSite` | `major` | The proxy sees excessive errors from upstream origin servers |
+
+<Aside type="danger" title="Filtering by severity silently drops the health check alert">
+`ServiceEndpointHealthcheckFailure` carries severity `minor`. An alert policy that matches only
+`major` and `critical` excludes it, which reproduces the original problem: alerting is configured and
+the health check failure still reaches no one. Match on the alert group `Virtual-Host` to capture
+both alerts.
+</Aside>
+
+## Reproduce the divergence locally
+
+You do not need a cloud account to watch a TCP probe disagree with a request. The following listener
+accepts connections and never responds, which is how a cloud load balancer behaves when its backends
+are gone.
+
+### Prerequisites
+
+- Python 3, `nc`, and `curl`
+- Two terminals
+- Two minutes
+
+### Steps
+
+<Steps>
+
+1. Start a listener that accepts connections and never replies.
+
+   ```bash
+   python3 -c "
+   import socket
+   s = socket.socket()
+   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+   s.bind(('127.0.0.1', 8443))
+   s.listen(16)
+   while True:
+       conn, _ = s.accept()
+   "
+   ```
+
+2. In the second terminal, run the equivalent of a TCP health check.
+
+   ```bash
+   nc -z -w 5 127.0.0.1 8443
+   ```
+
+3. Run the equivalent of an HTTP health check against the same listener.
+
+   ```bash
+   curl -sS --max-time 5 http://127.0.0.1:8443/health
+   ```
+
+</Steps>
+
+### Verify
+
+The TCP check succeeds and reports nothing wrong:
+
+```text
+Connection to 127.0.0.1 port 8443 [tcp/*] succeeded!
+```
+
+The HTTP check times out:
+
+```text
+curl: (28) Operation timed out after 5001 milliseconds with 0 bytes received
+```
+
+Compare the exit codes to confirm which probe would have changed the origin's status:
+
+```bash
+nc -z -w 5 127.0.0.1 8443
+echo "tcp exit: $?"
+```
+
+```text
+tcp exit: 0
+```
+
+```bash
+curl -sS --max-time 5 http://127.0.0.1:8443/health
+echo "http exit: $?"
+```
+
+```text
+http exit: 28
+```
+
+A `tcp_health_check` against this origin reports healthy indefinitely. An `http_health_check` marks
+it unhealthy after `unhealthy_threshold` consecutive failures.
+
+### Clean up
+
+Stop the listener with `Ctrl+C` in the first terminal. Nothing else is created.
+
+## Checklist
+
+Review each origin pool against the following:
+
+- [ ] The probe type matches the origin protocol, so `http_health_check` for HTTP and HTTPS origins
+- [ ] The probe path exercises application logic, not a static response from the web server
+- [ ] `interval`, `timeout`, and `unhealthy_threshold` produce a detection time you can accept, where
+      `interval` multiplied by `unhealthy_threshold` is the floor
+- [ ] Outlier detection is enabled, so real traffic errors eject an endpoint independently of the probe
+- [ ] The panic threshold is a deliberate choice rather than a default you have not read
+- [ ] More than one failure domain is represented, in separate pools referenced in a defined order
+- [ ] Failover has been tested by failing the primary pool, not inferred from configuration
+- [ ] An alert policy and receiver exist, matching the `Virtual-Host` alert group
