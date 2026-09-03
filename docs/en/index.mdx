@@ -1,11 +1,53 @@
 ---
-title: Observability
-description: Monitoring, metrics, and application insights for F5 Distributed Cloud.
-hero:
-  tagline: Monitoring, metrics, and application insights.
-  image:
-    html: '<img src="/observability/images/hero.svg" alt="F5 XC Observability" />'
-sidebar:
-  hidden: true
-  order: 0
+title: F5 Distributed Cloud Observability & Telemetry
+description: Distributed tracing, real-time analytics, synthetic health checks, and security event monitoring.
 ---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+**F5 Distributed Cloud Observability** provides unified end-to-end visibility across global application traffic, infrastructure health, and security events.
+
+## Telemetry Pipeline
+
+```text
++-------------------------------------------------------------------------+
+|                     Distributed Telemetry Data Pipeline                 |
+|                                                                         |
+|  Data Planes (Edge PoPs, Customer Edges, Load Balancers)                |
+|        |                                                                |
+|        v                                                                |
+|  +-------------------------------------------------------------------+  |
+|  | Telemetry Collector: Access Logs, Metrics (Prometheus), Spans    |  |
+|  +---------------------------------+---------------------------------+  |
+|                                    |                                    |
+|                                    v                                    |
+|  +-------------------------------------------------------------------+  |
+|  | Stream Processing & Anomaly Analytics                             |  |
+|  +---------------------------------+---------------------------------+  |
+|                                    |                                    |
+|         +--------------------------+--------------------------+         |
+|         | Dashboards & Logs                                   | Alerts  |
+|         v                                                     v         |
+|  +-----------------------------+               +---------------------+  |
+|  | F5 XC Console / Grafana UI  |               | Webhook, PagerDuty, |  |
+|  | Distributed Trace Views     |               | SIEM Export (Splunk)|  |
+|  +-----------------------------+               +---------------------+  |
++-------------------------------------------------------------------------+
+```
+
+## Core Capabilities
+
+<CardGrid>
+  <Card title="Real-Time Access Logs" icon="document">
+    Detailed Layer 7 request logs with millisecond resolution, TLS cipher metrics, and client geolocations.
+  </Card>
+  <Card title="Synthetic Health Checks" icon="pulse">
+    Continuous HTTP/HTTPS and TCP availability probes tracking latency and SLA thresholds.
+  </Card>
+  <Card title="Security Event Analytics" icon="seti:shield">
+    Aggregated WAF, Bot, and DDoS attack visualizations with drill-down query filtering.
+  </Card>
+  <Card title="External SIEM Export" icon="puzzle">
+    Stream telemetry in JSON format directly to Splunk, Datadog, or AWS S3 buckets.
+  </Card>
+</CardGrid>
